@@ -4,10 +4,41 @@ import { useChat } from '@ai-sdk/react';
 import { useState, useEffect } from 'react';
 
 export default function Home() {
-  const { messages, sendMessage, status } = useChat();
+  const { messages, sendMessage, status, setMessages } = useChat({
+    onError: (error) => {
+      if (error.message.includes('Too many messages')) {
+        setRateLimitMessage("You're sending messages a bit fast — give it about a minute, then try again.");
+        setTimeout(() => setRateLimitMessage(null), 8000);
+      } else if (error.message.includes('still being processed')) {
+        setRateLimitMessage("Your previous message is still being answered — hang tight.");
+        setTimeout(() => setRateLimitMessage(null), 5000);
+      }
+    },
+  });
   const [input, setInput] = useState('');
+  const [rateLimitMessage, setRateLimitMessage] = useState<string | null>(null);
+  const [queue, setQueue] = useState<string[]>([]);
+
+  useEffect(() => {
+    fetch('/api/chat')
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.messages && data.messages.length > 0) {
+          setMessages(data.messages);
+        }
+      });
+  }, []);
 
   const isThinking = status === 'submitted' || status === 'streaming';
+
+  useEffect(() => {
+    if (isThinking) return;
+    if (queue.length === 0) return;
+
+    const next = queue[0];
+    setQueue((prev) => prev.slice(1));
+    sendMessage({ text: next });
+  }, [isThinking, queue]);
 
   return (
     <div
@@ -81,9 +112,9 @@ export default function Home() {
                 </p>
               </div>
             )}
-            {messages.map((message) => (
+            {messages.map((message, index) => (
               <div
-                key={message.id}
+                key={message.id || `msg-${index}`}
                 className="flex gap-3 animate-[fadeIn_0.3s_ease-out]"
               >
                 {/* Avatar marker */}
@@ -139,6 +170,31 @@ export default function Home() {
                 </div>
               </div>
             )}
+
+            {queue.length > 0 && (
+              <div className="space-y-2">
+                {queue.map((text, i) => (
+                  <div key={`queued-${i}`} className="flex gap-3 opacity-40">
+                    <div
+                      className="shrink-0 h-7 w-7 mt-0.5 flex items-center justify-center text-[10px] font-[family-name:var(--font-mono-hud)] text-[#FFB454] border border-[#FFB454]/50 border-dashed"
+                      style={{ clipPath: 'polygon(50% 0%, 100% 25%, 100% 75%, 50% 100%, 0% 75%, 0% 25%)' }}
+                    >
+                      U
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-baseline gap-2 mb-1">
+                        <span className="font-[family-name:var(--font-mono-hud)] text-[10px] tracking-[0.15em] uppercase text-[#FFB454]/60">
+                          Queued
+                        </span>
+                      </div>
+                      <div className="font-[family-name:var(--font-inter)] text-[#E8F4F8]/60 text-sm leading-relaxed whitespace-pre-wrap">
+                        {text}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </main>
 
@@ -148,11 +204,27 @@ export default function Home() {
 
       {/* Input bar */}
       <footer className="shrink-0 border-t border-[#2E7FE0]/25 bg-[#0F1620]/70 backdrop-blur-md px-8 py-5 z-10">
+        {rateLimitMessage && (
+          <div className="max-w-2xl mx-auto w-full mb-3 flex items-center gap-2">
+            <span className="font-[family-name:var(--font-mono-hud)] text-[10px] tracking-[0.3em] text-[#FFB454]/90 border border-[#FFB454]/40 rounded px-2 py-1">
+              REQUEST LIMIT REACHED
+            </span>
+            <span className="font-[family-name:var(--font-inter)] text-xs text-[#5A7A8A]">
+              {rateLimitMessage}
+            </span>
+          </div>
+        )}
         <form
           onSubmit={(e) => {
             e.preventDefault();
             if (input.trim() === '') return;
-            sendMessage({ text: input });
+
+            if (isThinking) {
+              setQueue((prev) => [...prev, input]);
+            } else {
+              sendMessage({ text: input });
+            }
+
             setInput('');
           }}
           className="max-w-2xl mx-auto w-full flex items-center gap-3"
@@ -164,13 +236,13 @@ export default function Home() {
             className="flex-1 bg-transparent font-[family-name:var(--font-inter)] text-[#E8F4F8] placeholder:text-[#5A7A8A] outline-none text-sm"
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            placeholder="Ask something..."
+            placeholder={isThinking ? 'Type your next message — it will send after this reply...' : 'Ask something...'}
           />
           <button
             type="submit"
             className="font-[family-name:var(--font-mono-hud)] text-xs uppercase tracking-widest text-[#4FD8EB] border border-[#4FD8EB]/50 px-5 py-2.5 rounded hover:bg-[#4FD8EB]/10 hover:border-[#4FD8EB] transition-colors"
           >
-            Send
+            {isThinking ? 'Queue' : 'Send'}
           </button>
         </form>
       </footer>
